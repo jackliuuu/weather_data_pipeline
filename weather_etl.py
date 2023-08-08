@@ -5,7 +5,7 @@ import json
 import pandas as pd
 import os
 import datetime
-load_dotenv
+load_dotenv()
 CURRENT_DATE=datetime.datetime.now().strftime("%Y-%m-%d").replace("-","_")
 weather_api_key=os.getenv("API_KEY")
 S3=boto3.client('s3')
@@ -26,16 +26,23 @@ class WeatherPipeline:
                 writer.close()
     def getOrCreate_S3bucket(self,bucket_name = f'weather_bucket_{CURRENT_DATE}'):
         try:
-            s3.create_bucket(Bucket=bucket_name)
+            S3.create_bucket(Bucket=bucket_name)
             print(f"create bucket {bucket_name} success")
         except:
-            response= s3.list_buckets()
+            response= S3.list_buckets()
             bucket_names=[bucket['Name'] for bucket in response['Buckets']]
             if bucket_name in bucket_names:
                 print(f"bucket {bucket_name} already exists.")
-    def load_to_S3bucket(self):
-       
-        pass
+    def load_to_S3bucket(self,bucket_name=f'weather_bucket_{CURRENT_DATE}',overwrite=False):
+        if overwrite:
+            S3.delete_bucket(Bucket=bucket_name)
+        os.chdir(f"./airflow/data/{CURRENT_DATE}")
+        for file in os.listdir():
+            S3.upload_file(
+                Filename=file,
+                Bucket=bucket_name,
+                Key=f'{self.locations}.txt')
+
     
             
 
