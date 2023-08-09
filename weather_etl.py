@@ -5,7 +5,7 @@ import json
 import pandas as pd
 import os
 import datetime
-load_dotenv()
+load_dotenv('.env')
 CURRENT_DATE=datetime.datetime.now().strftime("%Y-%m-%d").replace("-","_")
 weather_api_key=os.getenv("API_KEY")
 S3=boto3.client('s3')
@@ -43,6 +43,24 @@ class WeatherPipeline:
                 Bucket=bucket_name,
                 Key=f'{self.locations}.txt')
 
-    
-            
+    def process_data(self):
+        os.chdir(f'./airflow/data/{CURRENT_DATE}')
+        files = os.listdir()
+        df = pd.DataFrame()
+        current_index = 0
+        for file in files:
+            with open(file,'r') as read_file:
+                data=json.loads(read_file.read())
+                location_data=data.get('location')
+                current_data=data.get('current')
+                location_df=pd.DataFrame(location_data,index=[current_index])
+                current_df=pd.DataFrame(current_data,index=[current_index])
+                current_index+=1
+                temp_df=pd.concat([location_df,current_df],axis=1)
+                df=pd.concat([df,temp_df])
+                read_file.close()
+        df = df.rename(columns={'name':'city'})
+        df['localtime'] = pd.to_datetime(df['localtime'])
+        return df
+
 
