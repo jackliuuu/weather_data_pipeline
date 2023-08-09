@@ -38,10 +38,8 @@ class WeatherPipeline:
             S3.delete_bucket(Bucket=bucket_name)
         os.chdir(f"./airflow/data/{CURRENT_DATE}")
         for file in os.listdir():
-            S3.upload_file(
-                Filename=file,
-                Bucket=bucket_name,
-                Key=f'{self.locations}.txt')
+            object_key = f"{file}_{CURRENT_DATE}_{datetime.datetime.now().strftime('%H:%M:%S')}"
+            S3.upload_file(file, bucket_name, object_key)
 
     
             
