@@ -7,6 +7,9 @@ import os
 import datetime
 from botocore.exceptions import ClientError
 import awswrangler as wr
+from xgboost import XGBRegressor
+from sklearn.neural_network import MLPRegressor
+from sklearn.model_selection import train_test_split
 load_dotenv(".env")
 CURRENT_DATE=datetime.datetime.now().strftime("%Y-%m-%d")
 aws_key=os.getenv("AWS_ACCESS_KEY_ID")
@@ -18,10 +21,11 @@ class WeatherPipeline:
     def __init__(self,locations=None) -> None:
         self.locations=locations
         self.s3=boto3.client('s3',
-                        aws_access_key_id=aws_key,
-                        aws_secret_access_key=aws_secret
-                        )
-        self.glue_client = boto3.client('glue')
+                                aws_access_key_id=aws_key,
+                                aws_secret_access_key=aws_secret)
+        self.glue_client = boto3.client('glue',
+                                        aws_access_key_id=aws_key,
+                                        aws_secret_access_key=aws_secret)
     def extract_weather_data(self):
         '''
         extract weather data from api
@@ -98,12 +102,74 @@ class WeatherPipeline:
             path=f"s3://weather-bucket-jack/{date}/weather_{date}.parquet",
             dataset=True,
             database="weather",
-            table=f"weather.{CURRENT_DATE}"
+            table=f"weather_{CURRENT_DATE}"
             )
             print(response)
         except Exception as e:
             print("An error occurred:",e)
-        
+    def train_model(self,df):
+        df=df.drop(columns=['region','country','tz_id', 'localtime','last_updated_epoch', 'last_updated', 'wind_dir', 'condition'])
+        city_map = {
+                'London':0,
+                'Moscow':1,
+                'Berlin':2,
+                'Paris':3,
+                'Rome':4,
+                'Madrid':5,
+                'Cairo':6,
+                'Tokyo':7,
+                'Sydney':8}
+        df['city']=df['city'].map(city_map)
+        x = df.drop(columns = ['temp_c'])
+        y = df['temp_c']
+        x_train,x_test,y_train,y_test=train_test_split(x,y,train_size=0.9,random_state=365)
+        model=XGBRegressor()
+        model.fit(x_train,y_train)
+        predictions = model.predict(x_test)
+        model_score = model.score(x_test, y_test)
+        cities=[]
+        for city_number in x_test.city.tolist():
+            for city,num in city_map.items():
+                if city_number==num:
+                    cities.append(city)
+        predictions_df=pd.DataFrame([*zip(cities,y_test,predictions,abs(y_test-predictions), 
+                                    [model_score]*len(cities))], 
+                                    columns=['city', 'actual_temp(Celcius)', 'predicted_temp(Celcius)', 'diff(Celcius)','score'])
+        print(f"Test Data Predictions:\n {predictions_df}")
+        return model
+    def predict_next_day_weather(self, model):
+        cities = ['London', 'Moscow' ,'Berlin' ,'Paris' ,'Rome' ,'Madrid', 'Cairo' ,'Tokyo', 'Sydney']
+        next_day = datetime.datetime.now() + datetime.timedelta(days=1)
+        next_day = next_day.strftime("%Y-%m-%d")
+        table=f'weather_{CURRENT_DATE}'.replace('-','_')
+        sql=f'WITH RankedWeather AS (SELECT*,ROW_NUMBER() OVER (PARTITION BY city ORDER BY localtime DESC) AS rn FROM {table}) SELECT * FROM  RankedWeather WHERE rn=1;'
+        df=wr.athena.read_sql_query(sql=sql,database='weather')
+        df = df.drop(columns = ['temp_c','rn', 'region', 'country', 'tz_id', 'localtime','last_updated_epoch', 'last_updated', 'wind_dir', 'condition'])
+        city_map = {
+                'London':0,
+                'Moscow':1,
+                'Berlin':2,
+                'Paris':3,
+                'Rome':4,
+                'Madrid':5,
+                'Cairo':6,
+                'Tokyo':7,
+                'Sydney':8}
+        df['city'] = df['city'].map(city_map)
+        df['localtime_epoch'] = df['localtime_epoch'] + 86400
+
+        # Predict next day weather
+        predictions = model.predict(df)
+
+        # Generate and print a predictions dataframe
+        predictions_df = pd.DataFrame([*zip(cities, predictions)], columns=['city', 'predicted_temp(Celcius)'])
+        predictions_df['at_date(UTC+8)'] = df['localtime_epoch']
+
+        # translate epoch to datetime
+        predictions_df['at_date(UTC+8)'] = pd.to_datetime(predictions_df['at_date(UTC+8)'], unit='s')
+        print(f"Next Day Predictions:\n {predictions_df}")
+
+        return predictions_df
 if __name__=="__main__":
     locations = ["London", "Tokyo", "Sydney", "Paris", "Berlin", "Moscow", "Madrid", "Rome", "Cairo"]
     weather=WeatherPipeline(locations)
@@ -112,4 +178,6 @@ if __name__=="__main__":
     # weather.load_to_S3bucket()
     df=weather.processData()
     print(df)
-    weather.createAthenaTable(df,CURRENT_DATE)
+    # weather.createAthenaTable(df,CURRENT_DATE)
+    model=weather.train_model(df)
+    weather.predict_next_day_weather(model=model)
