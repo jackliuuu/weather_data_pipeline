@@ -35,12 +35,12 @@ with DAG(
     def load_to_cloudStorage():
         weather.getOrCreate_S3bucket()
         weather.load_to_S3bucket()
-    # Task #3 - load_to_bigquery
+    # Task #3 - load_to_athena
     @task
-    def load_to_bigquery(dataset_name, table_name):
+    def load_to_athena(dataset_name, table_name):
         df=weather.processData()
         weather.createAthenaTable(df,CURRENT_DATE)
 
 
     # Dependencies
-    extract_weather_data() >> load_to_cloudStorage() >> load_to_bigquery("weather", "weather")
+    extract_weather_data() >> load_to_cloudStorage() >> load_to_athena("weather", "weather")
